@@ -1026,6 +1026,374 @@ class RequestType(Resource):
         )
 
 
+# Insight
+
+
+class InsightResource(Resource):
+    """Models a URL-addressable resource in the Jira Insight REST API.
+
+    All Resource objects provide the following:
+    ``find()`` -- get a resource from the server and load it into the current object
+    (though clients should use the methods in the JIRA class instead of this method directly)
+    ``update()`` -- changes the value of this resource on the server and returns a new resource object for it
+    ``delete()`` -- deletes this resource from the server
+    ``self`` -- the URL of this resource on the server
+    ``raw`` -- dict of properties parsed out of the JSON response from the server
+
+    Subclasses will implement ``update()`` and ``delete()`` as appropriate for the specific resource.
+
+    All Resources have a resource path of the form:
+
+    * ``issue``
+    * ``project/{0}``
+    * ``issue/{0}/votes``
+    * ``issue/{0}/comment/{1}``
+
+    where the bracketed numerals are placeholders for ID values that are filled in from the
+    ``ids`` parameter to ``find()``.
+    """
+
+    JIRA_INSIGHT_BASE_URL = "{server}/rest/{insight_rest_path}/{insight_rest_api_version}/{path}"
+    INSIGHT_REST_PATH = "insight"
+    INSIGHT_REST_API_VERSION = "1.0"
+
+    # A prioritized list of the keys in self.raw most likely to contain a human
+    # readable name or identifier, or that offer other key information.
+    _READABLE_IDS = (
+        "Name",
+    )
+
+    def __init__(self, resource, options, session, base_url=JIRA_INSIGHT_BASE_URL):
+        """Initializes a generic resource.
+        :param resource: The name of the resource.
+        :type resource: str
+        :param options: Options for the new resource
+        :type options: Dict[str,str]
+        :param session: Session used for the resource.
+        :type session: ResilientSession
+        :param base_url: The Base Jira url.
+        :type base_url: Optional[str]
+
+        """
+        Resource.__init__(self, resource, options, session, base_url)
+        self._resource = resource
+        self._options = options
+        self._session = session
+        self._base_url = base_url
+
+        # Explicitly define as None so we know when a resource has actually
+        # been loaded
+        self.raw = None
+
+    def __str__(self):
+        """Return the first value we find that is likely to be human readable.
+
+        :rtype: str
+        """
+        if self.raw:
+            for name in self._READABLE_IDS:
+                if name in self.raw:
+                    pretty_name = str(self.raw[name])
+                    # Include any child to support nested select fields.
+                    if hasattr(self, "child"):
+                        pretty_name += " - " + str(self.child)
+                    return pretty_name
+
+        # If all else fails, use repr to make sure we get something.
+        return repr(self)
+
+    def __repr__(self):
+        """Identify the class and include any and all relevant values.
+
+        :rtype: str
+        """
+        names = []
+        if self.raw:
+            for name in self._READABLE_IDS:
+                if name in self.raw:
+                    names.append(name + "=" + repr(self.raw[name]))
+        if not names:
+            return "<JIRA %s at %s>" % (self.__class__.__name__, id(self))
+        return "<JIRA %s: %s>" % (self.__class__.__name__, ", ".join(names))
+
+    def __getattr__(self, item):
+        """Allow access of attributes via names.
+
+        :param item: Attribute name
+        :type item: str
+
+        :rtype: Any
+
+        :raises KeyError: When the attribute does not exist.
+        :raises AttributeError: When attribute does not exist.
+
+        """
+        try:
+            return self[item]
+        except Exception as e:
+            # Make sure pickling doesn't break
+            #   *MORE INFO*: This conditional wouldn't be necessary if __getattr__ wasn't used. But
+            #                since it is in use (no worries), we need to give the pickle.dump*
+            #                methods what they expect back. They expect to either get a KeyError
+            #                exception or a tuple of args to be passed to the __new__ method upon
+            #                unpickling (i.e. pickle.load* methods).
+            #   *NOTE*: if the __new__ method were to be implemented in this class, this may have
+            #           to be removed or changed.
+            if item == "__getnewargs__":
+                raise KeyError(item)
+
+            if hasattr(self, "raw") and item in self.raw:
+                return self.raw[item]
+            else:
+                raise AttributeError(
+                    "%r object has no attribute %r (%s)" % (self.__class__, item, e)
+                )
+
+    # def __getstate__(self):
+    #     """
+    #     Pickling the resource; using the raw dict
+    #     """
+    #     return self.raw
+    #
+    # def __setstate__(self, raw_pickled):
+    #     """
+    #     Unpickling of the resource
+    #     """
+    #     self._parse_raw(raw_pickled)
+    #
+
+    def find(self, id, params=None):
+        """Finds a resource based on the input parameters.
+
+        :type id: Union[Tuple[str, str], int, str]
+        :type params: Optional[Dict[str, str]]
+
+        """
+
+        if params is None:
+            params = {}
+
+        if isinstance(id, tuple):
+            path = self._resource.format(*id)
+        else:
+            path = self._resource.format(id)
+        url = self._get_url(path)
+        self._load(url, params=params)
+
+    def _get_url(self, path):
+        """ Gets the url for the specified path.
+
+        :type path: str
+
+        :rtype: str
+
+        """
+        options = self._options.copy()
+        options.update({"path": path})
+        return self._base_url.format(**options)
+
+    def update(self, fields=None, async_=None, jira=None, notify=True, **kwargs):
+        """Update this resource on the server.
+
+        Keyword arguments are marshalled into a dict before being sent. If this
+        resource doesn't support ``PUT``, a :py:exc:`.JIRAError` will be raised; subclasses that specialize this method
+        will only raise errors in case of user error.
+
+        :param fields: Fields which should be updated for the object.
+        :type fields: Optional[Dict[str, Any]]
+        :param async_: If true the request will be added to the queue so it can be executed later using async_run()
+        :type async_: bool
+        :param jira: Instance of Jira Client
+        :type jira: jira.JIRA
+        :param notify: Whether or not to notify users about the update. (Default: True)
+        :type notify: bool
+        :type kwargs: **Any
+        """
+        if async_ is None:
+            async_ = self._options["async"]
+
+        data = {}
+        if fields is not None:
+            data.update(fields)
+        data.update(kwargs)
+
+        data = json.dumps(data)
+
+        if not notify:
+            querystring = "?notifyUsers=false"
+        else:
+            querystring = ""
+
+        r = self._session.put(self.self + querystring, data=data)
+        if "autofix" in self._options and r.status_code == 400:
+            user = None
+            error_list = get_error_list(r)
+            logging.error(error_list)
+            if "The reporter specified is not a user." in error_list:
+                if "reporter" not in data["fields"]:
+                    logging.warning(
+                        "autofix: setting reporter to '%s' and retrying the update."
+                        % self._options["autofix"]
+                    )
+                    data["fields"]["reporter"] = {"name": self._options["autofix"]}
+
+            if "Issues must be assigned." in error_list:
+                if "assignee" not in data["fields"]:
+                    logging.warning(
+                        "autofix: setting assignee to '%s' for %s and retrying the update."
+                        % (self._options["autofix"], self.key)
+                    )
+                    data["fields"]["assignee"] = {"name": self._options["autofix"]}
+                    # for some reason the above approach fails on Jira 5.2.11
+                    # so we need to change the assignee before
+
+            if (
+                "Issue type is a sub-task but parent issue key or id not specified."
+                in error_list
+            ):
+                logging.warning(
+                    "autofix: trying to fix sub-task without parent by converting to it to bug"
+                )
+                data["fields"]["issuetype"] = {"name": "Bug"}
+            if (
+                "The summary is invalid because it contains newline characters."
+                in error_list
+            ):
+                logging.warning("autofix: trying to fix newline in summary")
+                data["fields"]["summary"] = self.fields.summary.replace("/n", "")
+            for error in error_list:
+                if re.search(
+                    r"^User '(.*)' was not found in the system\.", error, re.U
+                ):
+                    m = re.search(
+                        r"^User '(.*)' was not found in the system\.", error, re.U
+                    )
+                    if m:
+                        user = m.groups()[0]
+                    else:
+                        raise NotImplementedError()
+                if re.search(r"^User '(.*)' does not exist\.", error):
+                    m = re.search(r"^User '(.*)' does not exist\.", error)
+                    if m:
+                        user = m.groups()[0]
+                    else:
+                        raise NotImplementedError()
+
+            if user:
+                logging.warning(
+                    "Trying to add missing orphan user '%s' in order to complete the previous failed operation."
+                    % user
+                )
+                jira.add_user(user, "noreply@example.com", 10100, active=False)
+                # if 'assignee' not in data['fields']:
+                #    logging.warning("autofix: setting assignee to '%s' and retrying the update." % self._options['autofix'])
+                #    data['fields']['assignee'] = {'name': self._options['autofix']}
+            # EXPERIMENTAL --->
+            if async_:
+                if not hasattr(self._session, "_async_jobs"):
+                    self._session._async_jobs = set()
+                self._session._async_jobs.add(
+                    threaded_requests.put(self.self, data=json.dumps(data))
+                )
+            else:
+                r = self._session.put(self.self, data=json.dumps(data))
+
+        time.sleep(self._options["delay_reload"])
+        self._load(self.self)
+
+    def delete(self, params=None):
+        """Delete this resource from the server, passing the specified query parameters.
+
+        If this resource doesn't support ``DELETE``, a :py:exc:`.JIRAError`
+        will be raised; subclasses that specialize this method will only raise errors
+        in case of user error.
+
+        :param params: Parameters for the delete request.
+        :type params: Optional[Dict[str, Any]]
+
+        :rtype: Response
+        """
+        if self._options["async"]:
+            if not hasattr(self._session, "_async_jobs"):
+                self._session._async_jobs = set()
+            self._session._async_jobs.add(
+                threaded_requests.delete(url=self.self, params=params)
+            )
+        else:
+            return self._session.delete(url=self.self, params=params)
+
+    def _load(self, url, headers=CaseInsensitiveDict(), params=None, path=None):
+        """ Load a resource.
+
+        :type url: str
+        :type headers: CaseInsensitiveDict
+        :type params: Optional[Dict[str,str]]
+        :type path: Optional[str]
+
+        """
+        r = self._session.get(url, headers=headers, params=params)
+        try:
+            j = json_loads(r)
+        except ValueError as e:
+            logging.error("%s:\n%s" % (e, r.text))
+            raise e
+        if path:
+            j = j[path]
+        self._parse_raw(j)
+
+    def _parse_raw(self, raw):
+        """Parse a raw dictionary to create a resource.
+
+        :type raw: Dict[str, Any]
+        """
+        self.raw = raw
+        if not raw:
+            raise NotImplementedError("We cannot instantiate empty resources: %s" % raw)
+        dict2resource(raw, self, self._options, self._session)
+
+    def _default_headers(self, user_headers):
+        # result = dict(user_headers)
+        # result['accept'] = 'application/json'
+        return CaseInsensitiveDict(
+            self._options["headers"].items() + user_headers.items()
+        )
+
+
+class Object(InsightResource):
+    """A Jira Insight Object."""
+
+    class _IssueFields(object):
+        def __init__(self):
+            self.attachment = None
+            """ :type : list[Attachment] """
+            self.description = None
+            """ :type : str """
+            self.project = None
+            """ :type : Project """
+            self.comment = None
+            """ :type : list[Comment] """
+            self.issuelinks = None
+            """ :type : list[IssueLink] """
+            self.worklog = None
+            """ :type : list[Worklog] """
+
+    def __init__(self, resource, options, session, raw=None):
+        InsightResource.__init__(self, resource, options, session)
+
+        self.fields = None
+        """ :type: :class:`~Object._IssueFields` """
+        self.id = None
+        """ :type: int """
+        self.key = None
+        """ :type: str """
+        if raw:
+            self._parse_raw(raw)
+
+    def __eq__(self, other):
+        """Comparison method."""
+        return other is not None and self.id == other.id
+
+
 # Utilities
 
 

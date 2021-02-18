@@ -49,10 +49,12 @@ from jira.resources import CustomFieldOption
 from jira.resources import Dashboard
 from jira.resources import Filter
 from jira.resources import GreenHopperResource
+from jira.resources import InsightResource
 from jira.resources import Issue
 from jira.resources import IssueLink
 from jira.resources import IssueLinkType
 from jira.resources import IssueType
+from jira.resources import Object
 from jira.resources import Priority
 from jira.resources import Project
 from jira.resources import RemoteLink
@@ -316,6 +318,8 @@ class JIRA(object):
         "rest_api_version": "2",
         "agile_rest_path": GreenHopperResource.GREENHOPPER_REST_PATH,
         "agile_rest_api_version": "1.0",
+        "insight_rest_api_version": InsightResource.INSIGHT_REST_API_VERSION,
+        "insight_rest_path": InsightResource.INSIGHT_REST_PATH,
         "verify": True,
         "resilient": True,
         "async": False,
@@ -1252,6 +1256,39 @@ class JIRA(object):
         x = {"groupname": groupname}
         self._session.delete(url, params=x)
         return True
+
+    # Insight
+
+    def iql(self, fields=None):
+        """Retrieves objects from the server from the given iql.
+
+        :param fields: comma-separated string of issue fields to include in the results
+        :type fields: Optional[str]
+        :rtype: Object
+        """
+
+        object = Object(resource="iql/objects", options=self._options, session=self._session)
+
+        params = {}
+        if fields is not None:
+            params = fields
+
+        object.find(None, params=params)
+        return object
+
+    def get_object(self, id):
+        """Finds an object based on given ID
+
+        :param id: ID of the object
+        :type id: Union[Issue, str]
+        :rtype: Issue
+        """
+        r_json = self._get_json()
+
+        object = Object(resource="object/{0}", options=self._options, session=self._session)
+
+        object.find(id=id)
+        return object
 
     # Issues
 
