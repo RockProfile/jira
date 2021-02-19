@@ -1359,32 +1359,28 @@ class InsightResource(Resource):
         )
 
 
-class Object(InsightResource):
-    """A Jira Insight Object."""
+class InsightObject(InsightResource):
+    """An Insight Object."""
 
-    class _IssueFields(object):
+    class _InsightObjectFields(object):
         def __init__(self):
-            self.attachment = None
-            """ :type : list[Attachment] """
-            self.description = None
+            self.name = None
             """ :type : str """
-            self.project = None
-            """ :type : Project """
-            self.comment = None
-            """ :type : list[Comment] """
-            self.issuelinks = None
-            """ :type : list[IssueLink] """
-            self.worklog = None
-            """ :type : list[Worklog] """
+            self.label = None
+            """ :type : str """
 
-    def __init__(self, resource, options, session, raw=None):
-        InsightResource.__init__(self, resource, options, session)
+    def __init__(self, options, session, raw=None):
+        InsightResource.__init__(self, "iql/object/(0)", options, session)
 
         self.fields = None
-        """ :type: :class:`~Object._IssueFields` """
+        """ :type: :class:`~Object._InsightObjectFields` """
         self.id = None
         """ :type: int """
-        self.key = None
+        self.name = None
+        """ :type: str """
+        self.label = None
+        """ :type: str """
+        self.objectKey = None
         """ :type: str """
         if raw:
             self._parse_raw(raw)
@@ -1392,6 +1388,15 @@ class Object(InsightResource):
     def __eq__(self, other):
         """Comparison method."""
         return other is not None and self.id == other.id
+
+
+class InsightObjectComment(InsightResource):
+    """An Insight Comment."""
+
+    def __init__(self, options, session, raw=None):
+        InsightResource.__init__(self, "comment/create", options, session)
+        if raw:
+            self._parse_raw(raw)
 
 
 # Utilities

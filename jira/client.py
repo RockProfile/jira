@@ -54,7 +54,8 @@ from jira.resources import Issue
 from jira.resources import IssueLink
 from jira.resources import IssueLinkType
 from jira.resources import IssueType
-from jira.resources import Object
+from jira.resources import InsightObject
+from jira.resources import InsightObjectComment
 from jira.resources import Priority
 from jira.resources import Project
 from jira.resources import RemoteLink
@@ -111,6 +112,8 @@ def translate_resource_args(func):
         for arg in args:
             if isinstance(arg, (Issue, Project)):
                 arg_list.append(arg.key)
+            elif isinstance(arg, InsightObject):
+                arg_list.append(arg.id)
             else:
                 arg_list.append(arg)
         result = func(*arg_list, **kwargs)
@@ -1264,31 +1267,56 @@ class JIRA(object):
 
         :param fields: comma-separated string of issue fields to include in the results
         :type fields: Optional[str]
-        :rtype: Object
+        :rtype: List[InsightObject]
         """
-
-        object = Object(resource="iql/objects", options=self._options, session=self._session)
 
         params = {}
         if fields is not None:
             params = fields
 
-        object.find(None, params=params)
-        return object
+        r_json = self._get_json("iql/objects", params=params, base=InsightResource.JIRA_INSIGHT_BASE_URL)
+        obj = [
+            InsightObject(self._options, self._session, raw_comment_json)
+            for raw_comment_json in r_json['objectEntries']
+        ]
+        return obj
 
-    def get_object(self, id):
-        """Finds an object based on given ID
+    @translate_resource_args
+    def insight_object_comments(self, insight_object):
+        """Get a list of comment Resources.
 
-        :param id: ID of the object
-        :type id: Union[Issue, str]
-        :rtype: Issue
+        :param insight_object: the insight object to get comments from
+        :type insight_object: InsightObject
+        :rtype: List[Comment]
         """
-        r_json = self._get_json()
+        r_json = self._get_json(f"comment/object/" + str(insight_object), base=InsightResource.JIRA_INSIGHT_BASE_URL)
 
-        object = Object(resource="object/{0}", options=self._options, session=self._session)
+        comments = [
+            InsightObjectComment(self._options, self._session, raw_comment_json)
+            for raw_comment_json in r_json
+        ]
+        return comments
 
-        object.find(id=id)
-        return object
+    @translate_resource_args
+    def create_insight_object_comment(self, comment, insight_object, role):
+        """Get a list of comment Resources.
+
+        :param comment: Comment to be posted
+        :type comment: str
+        :param insight_object: the insight object to post the comment onto
+        :type insight_object: InsightObject
+        :param role: the insight object to get comments from
+        :type role: str
+        :rtype: None
+        """
+        params = {
+            'comment': comment,
+            'objectId': insight_object,
+            'role': role
+        }
+
+        url = self._get_url("comment/create", InsightResource.JIRA_INSIGHT_BASE_URL)
+        self._session.post(url, data=json.dumps(params))
 
     # Issues
 
